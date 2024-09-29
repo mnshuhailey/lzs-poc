@@ -1,26 +1,28 @@
 import os
+import logging
 from dagster import op, job
 from dagster import Output, Out
 from poc_migration.resources import lzs_poc_migration_resource
 
-# Define transformation op that inserts data into lzs_poc_migration
+logging.basicConfig(filename='error_log.txt', 
+                    level=logging.ERROR, 
+                    format='%(asctime)s %(levelname)s %(message)s')
+
 @op(required_resource_keys={"lzs_poc_migration"})
 def insert_transform_asnaf_data(context, asnaf_data):
     lzs_conn = context.resources.lzs_poc_migration
     cursor = lzs_conn.cursor()
-
-    # Iterate through asnaf_data and insert into multiple tables
-    try:
-        for row in asnaf_data:
+    
+    for row in asnaf_data:
+        try:
             # Define a helper function to check for None or empty string and return a default value
             def get_default(value, default):
                 if value is None or value == '':
                     return default
                 return value
-            # Now row is a dictionary, so you can access by key
+
             context.log.info(f"Inserting data for asnafid: {row['vwlzs_asnafid']}")
 
-            # Insert into user table (use lowercase column names for PostgreSQL)
             user_insert_query = """
                 INSERT INTO "user" (asnafid, userusername, useremail, userstatus, created_at, updated_at)
                 VALUES (%s, %s, %s, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -31,7 +33,7 @@ def insert_transform_asnaf_data(context, asnaf_data):
                 row['vwlzs_nric'] or row['vwlzs_nricoldmilitarypolice'] or row['vwlzs_passportno'],
                 row['vwlzs_email'],
             ))
-            user_id = cursor.fetchone()[0]  # Get the newly created userid
+            user_id = cursor.fetchone()[0]
 
             # Check for mosque name in lookups table
             lookup_query = """
@@ -273,24 +275,14 @@ def insert_transform_asnaf_data(context, asnaf_data):
                 highest_education
             ))
 
-            # Insert into user_hubungan table
-            # user_hubungan_insert_query = """
-            #     INSERT INTO user_hubungan (upline_id, downline_id, relation_hubungan, created_at, updated_at)
-            #     VALUES (%s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
-            # """
-            # cursor.execute(user_hubungan_insert_query, (
-            #     row['vwlzs_pakidname'],
-            #     row['vwlzs_name'],
-            #     row['vwlzs_relationship']
-            # ))
-
             lzs_conn.commit()
             context.log.info(f"Inserted data for userID {user_id} successfully.")
 
-    except Exception as e:
-        lzs_conn.rollback()
-        context.log.error(f"Error inserting data for user: {e}")
-        raise
+        except Exception as e:
+            lzs_conn.rollback()
+            context.log.error(f"Error inserting data for asnafid {row['vwlzs_asnafid']}: {e}")
+            # Log error data to the log file
+            logging.error(f"Error inserting data for asnafid {row['vwlzs_asnafid']}: {e}, Data: {row}")
+            # Continue to the next row
 
-    finally:
-        cursor.close()
+    cursor.close()
